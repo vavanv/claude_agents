@@ -1,0 +1,6 @@
+{
+  "name": "dev-gate",
+  "version": "0.1.0",
+  "description": "Implement, validate and review one change, with the result computed from evidence.",
+  "license": "MIT"
+}

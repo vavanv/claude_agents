@@ -1,0 +1,11 @@
+{
+  "name": "claude-agents",
+  "owner": { "name": "local" },
+  "plugins": [
+    {
+      "name": "dev-gate",
+      "source": "./plugin",
+      "description": "Implement, validate and review one change, with the result computed from evidence."
+    }
+  ]
+}

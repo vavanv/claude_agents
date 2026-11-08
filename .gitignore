@@ -1,0 +1,5 @@
+node_modules/
+__pycache__/
+coverage/
+dist/
+.claude/settings.local.json

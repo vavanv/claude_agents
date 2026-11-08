@@ -1,67 +1,61 @@
 # dev-gate
 
-**A structured implementation, validation and review workflow for AI-assisted code changes.**
+`dev-gate` is a Claude Code plugin that takes one requested change through three separate agents: an implementer, a validator and a reviewer. You approve the requirements, the paths that may be edited and the commands that check the work before anything starts. A small script, not a model, enforces the stage order and works out the final result from recorded evidence.
 
-`dev-gate` is a Claude Code plugin that takes a bounded development task through three separate agents: an implementer, a validator and a reviewer. You approve the requirements, editable paths and verification commands before work starts. A Node.js gate enforces the workflow and computes the final result from recorded evidence.
+The aim is to make an AI-generated change easier to judge: what changed, which checks really ran, whether the reviewed files are the tested files, and what remains unverified.
 
-The goal is to make AI-generated changes easier to assess: what changed, which checks actually ran, whether the reviewed files match the tested files, and what remains unverified.
+**Status:** version 0.1.0. It has been tested only on Windows 11, in a small number of real runs.
 
-**Status:** version 0.1.0. Local testing has been limited to Windows 11; broader reliability and cross-platform compatibility have not been established.
+## Why use it
 
-## Why use dev-gate?
-
-AI coding agents can produce useful changes quickly, but evaluating those changes still takes work. When the same agent implements a solution, selects its checks and summarizes the result, a convincing explanation can hide an incomplete verification process. Code and tests can also share the same mistaken assumption.
-
-`dev-gate` adds explicit checkpoints and separates responsibilities so you have more evidence when deciding whether to accept a change.
+When one agent writes a change, picks its checks and summarizes the result, a convincing explanation can hide incomplete verification. Code and tests can also share the same wrong assumption. `dev-gate` splits those jobs and adds checkpoints, so you have more evidence when deciding whether to accept a change.
 
 | Problem | What dev-gate does |
 | --- | --- |
-| Test results are reported without enough evidence | The gate executes the approved checks and records their exit codes, parsed test counts and output logs. Agent summaries do not determine the result. |
-| The author overlooks its own assumptions | A separate reviewer inspects the code, acceptance criteria and validation evidence without receiving the implementer's reasoning. The reviewer cannot edit files. |
-| A small task grows into unrelated changes | Approved path rules restrict edits. File snapshots detect changes outside scope and changes to the candidate after implementation. |
-| Tests pass without detecting faulty behavior | Optional mutation testing introduces small faults on changed lines and checks whether the tests detect them. |
-| Missing verification is presented as success | A `PASS` requires the recorded stages, checks, candidate comparisons and reviewer approval. Missing required evidence produces `UNVERIFIED`. |
-| Review findings lead to repeated, untracked attempts | One automatic repair is allowed by default for concrete review findings or a mutation score below the required threshold. The report preserves evidence from both attempts. |
+| Test results are reported without evidence | The gate runs the approved checks itself and records their exit codes, parsed test counts and output logs. Agent summaries don't decide the result. |
+| The author misses its own assumptions | A separate reviewer reads the code, the acceptance criteria and the check evidence without the implementer's explanation. It can't edit files. |
+| A small task grows into unrelated changes | Edits are limited to the approved paths. File snapshots catch changes outside scope, and changes made after the implementer finished. |
+| Tests pass without noticing wrong behaviour | The optional mutation check makes small breaks on the changed lines and checks that the tests catch them. |
+| Missing verification is presented as success | A `PASS` needs every recorded stage, check, file comparison and the reviewer's approval. Missing evidence gives `UNVERIFIED`. |
+| Review findings lead to untracked retries | One repair is allowed by default, for concrete review findings or a low mutation score. The report keeps the evidence from both attempts. |
 
-### What it can help you achieve
+It suits bounded changes in projects with an existing, repeatable test suite. Every run needs at least one test check. Several agents and repeated checks add time and model cost, and the mutation check adds a control run plus one test run per break, so for a minor edit the overhead may outweigh the benefit.
 
-- **Review focused bug fixes with clearer evidence.** Define the expected behavior, constrain the affected files, and retain the checks and review findings for that change.
-- **Find gaps in regression tests.** For example, mutation testing can change `age >= 18` to `age > 18`. Tests that never exercise the boundary may still pass, exposing a missing case.
-- **Keep maintenance work within an agreed scope.** Use explicit file patterns for a targeted refactor or feature change, including the tests that may need updating.
-- **Investigate unsuccessful runs.** Check logs, file fingerprints, reviewer findings and earlier attempts help distinguish a code failure from an incomplete verification.
-
-The workflow is best suited to bounded changes in projects with an existing, repeatable test suite. Every run requires at least one test check. Multiple agents and repeated checks add latency and model cost; mutation testing adds a control run and one test run per selected mutation. For minor edits, this overhead may outweigh the benefit.
-
-You remain responsible for the requirements and the final acceptance decision. A `PASS` means the configured workflow succeeded; it does not establish complete test coverage or guarantee correctness.
+You remain responsible for the requirements and the final decision. A `PASS` means the configured workflow succeeded. It doesn't prove the tests are complete or the change is correct.
 
 ## How it works
 
 ```text
-Request -> Approved specification -> Implementer -> Validator -> Reviewer -> Report
-                                          ^                        |
-                                          +-- One eligible repair -+
+Request -> Approved spec -> Checks before -> Implementer -> Validator -> Reviewer -> Report
+                                 ^                         |
+                                 +---- one repair, if -----+
+                                       the gate allows it
 ```
 
-| Component | Responsibility |
+| Part | Job |
 | --- | --- |
-| Implementer | Reads the project and edits only approved paths. Has no shell access. |
-| Validator | Invokes the gate's declared checks in order. Cannot edit files or substitute commands. |
-| Reviewer | Reads the candidate and relevant tests, then returns approval or concrete findings. Has no edit or shell tools. |
-| Gate and hooks | Enforce stage order and tool restrictions, compare file hashes at checkpoints, record evidence and compute the result. |
+| Implementer | Reads the project, and edits or deletes only approved paths. Its only shell command is the gate's `remove`, one file in scope at a time. |
+| Validator | Runs the spec's checks through the gate, in order. Can't edit files or change the commands. |
+| Reviewer | Reads the changed files and the tests, then approves or returns concrete findings. Has no edit or shell tools. |
+| Gate and hooks | Enforce stage order and tool limits, compare file hashes at checkpoints, record evidence and compute the result. |
 
-The gate captures a baseline before implementation and fingerprints the candidate afterward. Validation and review are checked against that candidate so a detected file change cannot silently inherit an earlier passing result. Existing working-tree changes are included in the baseline.
+The gate records a baseline before the implementer starts and fingerprints the files when it finishes. Validation and review are checked against that fingerprint, so a file changed later can't inherit an earlier passing result. Uncommitted changes already in your working tree become part of the baseline.
+
+Before any stage starts, `gate init` runs every check once on the unchanged project. A check that already fails can't show what the change did, so it stops the run with `SETUP_REQUIRED`, and the report shows its log. For a task whose point is to make a failing check pass, list it in `"failingBefore"`; it must still pass afterwards. `"checkBefore": false` skips this for checks too slow to run twice. The checks before the change share 540 s, so `gate init` fits in one Bash call.
 
 ## Requirements
 
-- Claude Code 2.1.317 or later. The hooks rely on recent hook features. It was tested on 2.1.317 and 2.1.318.
+- Claude Code 2.1.317 or later. The hooks rely on recent hook features. Tested on 2.1.317 to 2.1.319.
 - Node.js on your `PATH`, tested on Node 24. The plugin has no other dependencies.
 - Git is recommended. Without it, the gate walks the project folder instead of using `git ls-files`.
+- Windows 11. Linux and macOS are out of scope.
 
 ## Install
 
-Keep a local copy of this repository and add it as a plugin marketplace. The commands below use `C:/Develop/agents/claude_agents`; replace that path with your checkout location. Adding the marketplace is a one-time operation that writes to your user configuration:
+Clone the repository, then add your copy as a plugin marketplace. The commands below use `C:/Develop/agents/claude_agents`; replace it with your checkout location. Adding the marketplace is a one-time step that writes to your user configuration:
 
 ```bash
+git clone https://github.com/vavanv/claude_agents.git C:/Develop/agents/claude_agents
 claude plugin marketplace add C:/Develop/agents/claude_agents
 ```
 
@@ -72,11 +66,9 @@ claude plugin install dev-gate@claude-agents --scope local
 claude plugin list
 ```
 
-`dev-gate` should be listed. `--scope local` writes only `.claude/settings.local.json` in that project, and your `CLAUDE.md` and `AGENTS.md` aren't touched.
+`dev-gate` should be listed. `--scope local` writes only `.claude/settings.local.json` in that project. Your `CLAUDE.md` and `AGENTS.md` aren't touched.
 
-The plugin loads from this folder, so keep the folder in place. Edits here apply at the next session start or after `/reload-plugins`.
-
-To try it without installing, start Claude Code from your project with `claude --plugin-dir C:/Develop/agents/claude_agents/plugin`.
+Installed this way, from a local folder, the plugin loads from that folder, so keep it in place. Edits apply at the next session start or after `/reload-plugins`, with no version change or reinstall. `claude plugin list` shows the folder as `readFromFolder`. To try it without installing, use `claude --plugin-dir C:/Develop/agents/claude_agents/plugin`.
 
 ## Use
 
@@ -87,37 +79,53 @@ Start `claude` in your project, then enter:
 ```
 
 1. Claude drafts a spec: acceptance criteria, the paths that may be edited, and the commands that check the work. You approve it.
-2. The **implementer** makes the change. It has no shell, and edits outside the approved paths are refused.
-3. The **validator** runs each check through the gate, which records the real exit code and test counts. If the spec asks for it, it also runs the mutation check.
-4. The **reviewer** reads the code and returns a verdict. It can't edit anything.
-5. The gate prints the report.
+2. The gate runs the checks once on the unchanged project, and stops if one already fails.
+3. The **implementer** makes the change. Its only shell command deletes one file in scope, and edits outside the approved paths are refused.
+4. The **validator** runs each check through the gate, which records the real exit code and test counts. If the spec asks for it, it also runs the mutation check.
+5. The **reviewer** reads the code and returns a verdict. It can't edit anything.
+6. The gate prints the report.
 
 Stages may run in the background, one at a time. Don't change files yourself until the report has printed.
 
 | Result | Meaning |
 | --- | --- |
-| `PASS` | All stages finished, every declared check passed, each test check recorded at least one passing test and no failures, the reviewer approved, the mutation check passed if requested, and candidate comparisons matched at the required checkpoints. |
+| `PASS` | All stages finished, all checks passed with at least one test, the reviewer approved, the mutation check passed if requested, and the files never changed after the implementer finished. |
 | `FAILED` | A check, the reviewer or the mutation check rejected the change, or files changed that shouldn't have. |
 | `UNVERIFIED` | Required evidence is missing: for example a command couldn't start, no tests ran, a stage didn't finish, or the mutation check couldn't get a result. |
-| `SETUP_REQUIRED` | The run stopped before any work, because of a bad spec or a missing command. |
+| `SETUP_REQUIRED` | The run stopped before any work, because of a bad spec, a missing command, or a check that already failed before the change. |
+
+The report also lists each acceptance criterion with the test the reviewer says covers it, or says the reviewer checked it only by reading. That's the reviewer's statement, not something the gate measured, so it doesn't change the result. A `PASS` with any criterion lacking a named test carries a note.
+
+To make that binding, add `"requireTests": true` to the spec. A criterion with no named test then goes back to the implementer once, like a review finding, and the run is `FAILED` if it still has none. A reviewer that gives no readable list makes it `UNVERIFIED`. This still rests on the reviewer's statement: a reviewer that names a test which doesn't really cover the criterion isn't caught. Write each criterion so that a test can check it. Something like "nothing else changes" has no natural test, so rely on the scope for that.
 
 If the reviewer rejects a change with concrete findings, or the mutation check finds breaks the tests miss, the gate sends those findings back to the implementer once, and all three stages run again with new agents. The report keeps both attempts. Set `"maxRepairs": 0` in the spec to turn this off.
 
 Nothing else is retried: a failed check, a changed candidate, or a second rejection ends the run. Its changes stay in your working tree for you to keep or discard.
 
-Evidence for each run is kept in `~/.claude/dev-gate/runs/`, and the report's last line gives the folder.
-
 ### Evidence you can inspect
 
-Each completed run produces a Markdown report (`report.md`) and a JSON report (`report.json`). The run directory also retains the approved specification (`spec.json`), state (`state.json`), event history (`events.jsonl`) and check logs.
+Evidence for each run is kept in `~/.claude/dev-gate/runs/`, and the report's last line gives the folder. It holds:
 
-The reports include changed paths, the candidate fingerprint, checkpoint comparisons, check outcomes and test counts, mutation results when requested, reviewer findings and any earlier repair attempt. A separate model audit compares local transcript records with the configured models; its outcome does not determine `PASS` or `FAILED`.
+- `report.md` and `report.json`: changed paths, the file fingerprint, checkpoint comparisons, check results and test counts, mutation results if requested, reviewer findings, and any earlier repair attempt.
+- `spec.json`, `state.json` and `events.jsonl`: the approved spec, the run's state and its event history.
+- The check logs, with those from before the change in `checks/before/`.
+- The original files in `baseline/` and a copy of each changed file in `changes/attempt-N/files/`. Protected files aren't copied.
+
+To see what a run changed, compare the two copies, for example:
+
+```bash
+git diff --no-index baseline/src/a.txt changes/attempt-1/files/src/a.txt
+```
+
+The report also has a model audit, which compares the local transcripts with the configured models. Its outcome doesn't affect `PASS` or `FAILED`.
 
 ### Permission prompts
 
-Permission prompts depend on your Claude Code configuration and the checks in the specification. In `manual` mode, expect prompts for inspection, initialization, edits, validation and reporting. Prompts from background stages identify the requesting agent.
+How many prompts you see depends on your Claude Code permission settings and on the checks in the spec. In the default mode, expect prompts for reading the project, starting the run, edits, checks and the report.
 
-In local testing, the broad persistent permission offered for gate commands was `node *`, which covers every Node command. The pending session identifier expires after 60 seconds: if approval of `gate init` takes longer, the run may start without a session identifier. Its restrictions then apply to every hooked session in that project until the run closes.
+If Claude Code offers to always allow a broad rule such as `node *`, note that it covers every Node command, not just the gate.
+
+Answer the prompt for `gate init` within 60 seconds. After that the run starts without a session id, and its limits then apply to every session in that project until the run ends.
 
 ### Mutation check
 
@@ -152,11 +160,11 @@ All the settings are optional, and `{}` uses the defaults:
 - **The default needs every break caught.** Some breaks can't be caught in practice, or don't change behaviour. For example, `now <= end` versus `now < end` needs a frozen clock. Lowering `minScore` allows for this, but it can't choose which breaks to let through, so it could also let through an important one.
 - **JavaScript, TypeScript and Python are supported.** Other changed files are listed in the report as not mutated.
 - **Use it only with tests that are safe to repeat.** Mutated code runs your tests up to `maxMutants` more times, with your permissions. Don't use it if they touch real databases or external services.
-- **The copy uses the candidate's file inventory,** minus protected paths. `node_modules`, `.venv` and `venv` are linked, not copied, so a test that writes to them changes the real folder. Tests that need an omitted `.env` or build output fail in the copy, which gives `UNVERIFIED`.
+- **The copy holds the files in the gate's file list,** minus protected paths. With Git, that's the files Git doesn't ignore. `node_modules`, `.venv` and `venv` are linked, not copied, so a test that writes to them changes the real folder. Tests that need `.env` or a build output fail in the copy, which gives `UNVERIFIED`.
 
 ### Project defaults
 
-The skill reads an optional `.claude/dev-gate.json` for defaults such as protected paths and common checks. Claude reads this file when drafting the spec, and the gate itself doesn't, so check that the spec you approve includes them.
+The skill reads an optional `.claude/dev-gate.json` for defaults such as protected paths and common checks. Claude reads it when drafting the spec, and the gate itself doesn't, so check that the spec you approve includes them.
 
 ```json
 {
@@ -177,7 +185,21 @@ node C:/Develop/agents/claude_agents/plugin/bin/gate.cjs status
 node C:/Develop/agents/claude_agents/plugin/bin/gate.cjs abort --reason "why"
 ```
 
-Aborting an unfinished run produces `UNVERIFIED` unless the gate has already recorded a halt result; the first halt is preserved. If the active pointer or state is corrupt, `abort` archives the pointer and writes an `UNVERIFIED` recovery report, preserving the original run evidence. Other hooked actions stay blocked until recovery. As a last resort, `claude plugin disable dev-gate` turns the hooks off.
+Aborting gives `UNVERIFIED`, unless the run had already stopped with a result, which is kept. If the active pointer or state is corrupt, `abort` archives the pointer and writes an `UNVERIFIED` recovery report, preserving the original run evidence. Other hooked actions stay blocked until recovery. As a last resort, `claude plugin disable dev-gate` turns the hooks off.
+
+### Questions
+
+**The reviewer rejected the change. Can I fix it and rerun only the reviewer?**
+No. The gate already sends the findings back to the implementer once, and all three stages run again. After that the run is closed, and no stage can run again. The checks and the reviewer's verdict apply to the change as it was frozen when the implementer finished. A reviewer approving code that no validator checked would defeat the point. To continue, fix the code yourself without a gate verdict, or start a new `/dev-gate:develop` request with the findings in the task. A new run starts from the project as it is now, including your fix.
+
+**Can I edit files while a run is going?**
+Don't. The hooks only limit Claude, not your editor. If you change a file after the implementer finishes, the gate's next comparison with the frozen change doesn't match, and the run can't get `PASS`. Wait until the report has printed.
+
+**Can I allow more than one repair?**
+No. `maxRepairs` can be `1`, the default, or `0`. A second rejection ends the run, so that retries don't go on until a reviewer happens to approve.
+
+**The run ended `FAILED`. What happened to my files?**
+The gate doesn't undo anything. The implementer's changes stay in your working tree for you to keep or discard. The evidence folder keeps the original files and a copy of each attempt, as described in [Evidence you can inspect](#evidence-you-can-inspect).
 
 ## Uninstall
 
@@ -187,7 +209,7 @@ From the project:
 claude plugin uninstall dev-gate@claude-agents --scope local
 ```
 
-To remove the marketplace from your user config as well:
+To remove the marketplace from your user configuration as well:
 
 ```bash
 claude plugin marketplace remove claude-agents
@@ -195,16 +217,16 @@ claude plugin marketplace remove claude-agents
 
 Run evidence stays in `~/.claude/dev-gate/runs/`.
 
-## Limitations
+## What this doesn't guarantee
 
 Use it with supervision. Real runs have been few, so there's no measured reliability rate, and it isn't suited to unattended use.
 
 - **These are guardrails, not security.** They catch drift and mistakes, not a hostile agent. Claude Code's Bash sandbox doesn't run on native Windows.
-- **Files are compared at checkpoints.** With Git, the inventory covers tracked and untracked files that `git ls-files --exclude-standard` enumerates. Without Git, a directory walk skips dependency and common output folders. Declared artifacts and changes undone between checkpoints aren't covered.
+- **Files are compared at checkpoints.** With Git, the comparison covers the tracked and untracked files that `git ls-files --exclude-standard` lists. Without Git, a folder walk skips dependency and common output folders. Git-ignored files, declared artifacts and changes undone between checkpoints aren't covered.
 - **Commands run by checks aren't restricted.** They run with your permissions, so only approve commands you trust.
 - **Protected content is guarded in `Read`, `Grep` and edits, including root access.** Directory searches are refused if their tree contains protected paths, even when search filters would exclude them; search an unprotected file or smaller directory instead. A `.env*` file inside `node_modules`, `.venv` or `venv` is treated as part of a package, so it's readable and doesn't block a search, unless you list it in `protected`; edits to it are still refused. Don't keep real secrets there under those names. A real `.env` at the project root means root-level searches are refused. `Glob`, file references, shell output and check commands aren't content boundaries, so use permission deny rules as well for real secrets.
 - **Separate agents can share blind spots.** A `PASS` doesn't prove the change is correct or fully tested. In testing, one reviewer rejected a test gap that another reviewer, given the same spec, approved. The mutation check narrows this, but it tries only a limited set of breaks on changed lines, and it can't tell whether the requirements themselves are right.
-- **A passing criterion can have no test.** If a criterion's behaviour is outside the changed lines and untested, neither the mutation check nor a non-blocking review note stops a `PASS`.
+- **A passing criterion can have no test.** Without `requireTests`, a criterion whose behaviour is outside the changed lines and untested gets only a note, and nothing stops a `PASS`.
 - **The model audit reads a local transcript.** It's a record, not an attestation.
 
 ## Project layout
@@ -217,13 +239,8 @@ plugin/hooks/hooks.json           Hook registration
 plugin/bin/gate.cjs               Gate command line
 plugin/bin/hook.cjs               Hook entry point
 plugin/bin/lib/                   Run state, parsers and mutation check
-test/                             Tests
 ```
 
-## Tests
+## License
 
-```bash
-npm test
-```
-
-No dependency installation is needed. The suite uses Node's built-in test runner and makes no model calls. It covers workflow ordering, scope restrictions, candidate integrity, test-output parsing, review and repair handling, mutation testing and recovery from corrupt state. These automated checks do not replace live testing in Claude Code.
+[MIT](LICENSE)

@@ -1,0 +1,9 @@
+{
+  "name": "claude-agents",
+  "private": true,
+  "license": "MIT",
+  "description": "The dev-gate Claude Code plugin and its tests. The plugin itself has no dependencies.",
+  "scripts": {
+    "test": "node --test --test-concurrency=4 \"test/**/*.test.cjs\""
+  }
+}
